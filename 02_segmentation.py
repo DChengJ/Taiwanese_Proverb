@@ -18,13 +18,12 @@ class Segmentation(object):
     def segmentation(self):
         rule = re.compile(r'[^\u4e00-\u9fa5]')
         jieba.set_dictionary('./tools/extra_dict/dict.txt')
-        with open('./word2vec_data/segmentation.tx', 'w', encoding='utf-8') as segmentation :
+        with open('./word2vec_data/segmentation.txt', 'w', encoding='utf-8') as segmentation :
             with open('./word2vec_data/traditional.txt', 'r', encoding='utf-8') as Corpus:
                 for sentence in Corpus:
                     sentence = sentence.strip("\n")
                     sentence = rule.sub("", sentence)
                     words =list(jieba.cut(sentence, cut_all=False))
-                    print(' '.join(words))
                     segmentation.write(' '.join(words))
         
 if __name__ == "__main__":

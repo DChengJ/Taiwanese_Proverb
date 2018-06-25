@@ -8,6 +8,7 @@ import time
 from pickle import load
 from numpy import array
 from numpy import argmax
+import jieba
 from keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
 from keras.models import load_model
@@ -20,21 +21,12 @@ tf.app.flags.DEFINE_string('word2vec_path', 'word2vec/cna.cbow.cwe_p.tar_g.512d.
 tf.app.flags.DEFINE_string('dataset_path', 'crossvalidation/newProverb2_jieba_v3_1-both.pkl', 'all dataset of path to directory')
 tf.app.flags.DEFINE_string('train_path', 'crossvalidation/newProverb2_jieba_v3_1-1-train.pkl', 'train dataset of path to directory')
 tf.app.flags.DEFINE_string('test_path', 'crossvalidation/newProverb2_jieba_v3_1-1-test.pkl', 'test dataset of path to directory')
-tf.app.flags.DEFINE_string('model_path', 'model.h5', 'model of path to directory')
-tf.app.flags.DEFINE_integer('input_length', 15, 'Input sentence length')
+tf.app.flags.DEFINE_integer('input_length', 10, 'Input sentence length')
 tf.app.flags.DEFINE_integer('dim_size', 512, 'The Dimensions of Word2Vec')
-
 
 # load a clean dataset
 def load_sentences(filename):
         return load(open(filename, 'rb'))
-
-# load Word2Vec
-def load_word2vec_pkl(pkl_path):
-    with open(pkl_path, 'rb') as f:
-        words_index = load(f)
-        words_vectors = load(f)
-    return words_index, words_vectors
 
 def load_word2vec(wv_path):
     dim = 0
@@ -52,6 +44,7 @@ def load_word2vec(wv_path):
             words_vectors[word] = vec
     return words, words_vectors
 
+# Compare dataset's word and word2vec's word
 def compare_WV(dataset, wv):
     lines = list()
     train_wv = list()
@@ -100,60 +93,48 @@ def max_length(lines):
 
 # encode and pad sequences
 def encode_sequences(tokenizer, length, lines):
-        # integer encode sequences
-        X = tokenizer.texts_to_sequences(lines)
-        # pad sequences with 0 values
-        X = pad_sequences(X, maxlen=length, padding='post')
-        return X
+    # integer encode sequences
+    X = tokenizer.texts_to_sequences(lines)
+    # pad sequences with 0 values
+    X = pad_sequences(X, maxlen=length, padding='post')
+    return X
 
 # map an integer to a word
 def word_for_id(integer, tokenizer):
-        for word, index in tokenizer.word_index.items():
-                if index == integer:
-                        return word
-        return None
+    for word, index in tokenizer.word_index.items():
+        if index == integer:
+            return word
+    return None
 
 # generate target given source sequence
 def predict_sequence(model, tokenizer, source):
-        prediction = model.predict(source, verbose=0)[0]
-        integers = [argmax(vector) for vector in prediction]
-        print(integers)
-        target = list()
-        for i in integers:
-                word = word_for_id(i, tokenizer)
-                if word is None:
-                        break
-                target.append(word)
-        return ' '.join(target)
+    prediction = model.predict(source, verbose=0)[0]
+    print(len(prediction))
+    integers = [argmax(vector) for vector in prediction]
+    print(integers)
+    target = list()
+    for i in integers:
+            word = word_for_id(i, tokenizer)
+            if word is None:
+                    break
+            target.append(word)
+    return ' '.join(target)
 
-# evaluate the skill of the model
-def evaluate_model(model, tokenizer, sources, raw_dataset):
-    actual, predicted = list(), list()
-    for i, source in enumerate(sources):
-        if i == 30: break
-        print('第', i+1, '個')
-        # translate encoded source text
-        source = source.reshape((1, source.shape[0]))
-        translation = predict_sequence(model, tokenizer, source)
-        label, raw_src, raw_target = raw_dataset[i]
-        words = list()
-        for s in source[0]:
-            words.append(word_for_id(s, tokenizer))
-        print('謎面編號：', source)
-        print('謎面：利用編號再轉換成文字：', words)
-        print('謎面：', raw_src)
-        print('謎底：', raw_target)
-        print('預測謎底：', translation)
-        print('i=[%s], src=[%s], target=[%s], predicted=[%s]' % (i, raw_src, raw_target, translation))
-        #if i < 10:
-        #    print('i=[%s], src=[%s], target=[%s], predicted=[%s]' % (i, raw_src, raw_target, translation))
-        actual.append(raw_target.split())
-        predicted.append(translation.split())
-    # calculate BLEU score
-    print('BLEU-1: %f' % corpus_bleu(actual, predicted, weights=(1.0, 0, 0, 0)))
-    print('BLEU-2: %f' % corpus_bleu(actual, predicted, weights=(0.5, 0.5, 0, 0)))
-    print('BLEU-3: %f' % corpus_bleu(actual, predicted, weights=(0.3, 0.3, 0.3, 0)))
-    print('BLEU-4: %f' % corpus_bleu(actual, predicted, weights=(0.25, 0.25, 0.25, 0.25)))
+def segment(sentence):
+    print('Your input is ', sentence)
+    words = list(jieba.cut(sentence, cut_all=False))
+    #words = jieba.cut_for_search(sentence)
+    print("Output 精確模式 Full Mode：")
+    new_words = []
+    #print(' '.join(words))
+    a = False
+    for word in words:
+        if word == '-' or word == ' ':
+            a= True
+            continue
+        new_words.append(word)
+    print(' '.join(new_words))
+    return new_words
 
 def main(argv):
     # parameter
@@ -161,7 +142,7 @@ def main(argv):
     wv_path = FLAGS.word2vec_path
     input_length = FLAGS.input_length
     dim_size = FLAGS.dim_size
-    model_path = 'models/seq2seq/'+ FLAGS.model_path
+    model_path = 'models/seq2seq/model.h5'
 
     #dataset parameter
     dataset_path = FLAGS.dataset_path
@@ -186,22 +167,13 @@ def main(argv):
     #texts = [word for word in words_index]  
     train_tokenizer = create_tokenizer(sentences)
     train_vocab_size = len(train_tokenizer.word_index) + 1
-    X_length = max_length(dataset[:, 1])
-    Y_length = max_length(dataset[:, 2])
-
-    # prepare data
-    trainX = encode_sequences(train_tokenizer, input_length, train[:, 1])
-    testX = encode_sequences(train_tokenizer, input_length, test[:, 1])
-
-    # load model
-    model = load_model(model_path)
-    # test on some training sequences
-    print('train')
-    evaluate_model(model, train_tokenizer, trainX, train)
-
-    # test on some test sequences
-    print('test')
-    evaluate_model(model, train_tokenizer, testX, test)
+    while True:
+        input_sentence = input('Input a sentence:')
+        if input_sentence == '0' or input_sentence == '': break
+        sentence = [segment(input_sentence)]
+        print(sentence)
+        X = encode_sequences(train_tokenizer, input_length, sentence)
+        print(X)
 
 if __name__ == '__main__':
     tf.app.run()

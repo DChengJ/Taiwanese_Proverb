@@ -2,15 +2,16 @@ import tensorflow as tf
 import numpy as np
 import collections
 import string
+#import tools.jiebazhtw as jieba
 import jieba
 import re
 from pickle import dump
 from hanziconv import HanziConv
 
 FLAGS = tf.app.flags.FLAGS
-tf.app.flags.DEFINE_string('data_path', './data/newProverb2_v4_0.csv', 'path to directory')
-tf.app.flags.DEFINE_string('dict_path', './tools/extra_dict/dict.txt', 'dict path to directory')
-tf.app.flags.DEFINE_string('output_path', './pkl_data/newProverb2_jieba_v4_0.pkl', 'output path to directory')
+tf.app.flags.DEFINE_string('data_path', './data/newProverb2_v2_1.csv', 'path to directory')
+tf.app.flags.DEFINE_string('dict_path', None, 'dict path to directory')
+tf.app.flags.DEFINE_string('output_path', './pkl_data/newProverb2_jieba_v2_1.pkl', 'output path to directory')
 
 
 def load_data(data_path):
@@ -37,10 +38,11 @@ def clean_pair(lines):
                 clean_pair.append(line)
                 continue
             line = rule.sub("", line)
-            line = HanziConv.toSimplified(line)
+            #line = HanziConv.toSimplified(line)
             # line = [' '.join(word for word in jieba.cut(line, cut_all=False))]
             words =list(jieba.cut(line, cut_all=False))
-            clean_pair.append(' '.join(HanziConv.toTraditional(word) for word in words))            
+            clean_pair.append(' '.join(word for word in words))
+            #clean_pair.append(' '.join(HanziConv.toTraditional(word) for word in words))
         cleaned.append(clean_pair)
     return np.array(cleaned)
 
@@ -49,20 +51,27 @@ def save_clean_data(sentences, filename):
         dump(sentences, f)
         print('Saved: %s' % filename)
 
+def save_clean_data2(sentences, filename):
+    with open(filename, 'w', encoding='utf-8') as f:
+        for sentence in sentences:
+            f.write("\"%s\",\"%s\",\"%s\"\n" % (sentence[0], sentence[1], sentence[2]))
+        print('Saved: %s' % filename)
+
 def main(argv):
     data_path = FLAGS.data_path
     output_path = FLAGS.output_path
     dict_path = FLAGS.dict_path
-    if dict_path != "":
+    if dict_path == "" or dict_path == None:
+        print('Use Default')
+    else:
         print('Use Dict: ', dict_path)
         jieba.load_userdict(dict_path)
-    else:
-        print('Use Default')
 
     datas = load_data(data_path)
     pairs = to_pairs(datas)
     clean_pairs = clean_pair(pairs)
-    save_clean_data(clean_pairs, output_path)
+    #save_clean_data(clean_pairs, output_path)
+    print("Sentence Counts:", len(clean_pairs))
     for i in range(10):
         print('[%s]: [%s] => [%s]' % (clean_pairs[i,0], clean_pairs[i,1], clean_pairs[i,2]))
 

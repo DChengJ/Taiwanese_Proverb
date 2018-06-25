@@ -7,7 +7,8 @@ import os
 import time
 from pickle import load
 from numpy import array
-
+from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import KFold
 from keras.models import Sequential
 from keras.layers.embeddings import Embedding
 from keras.preprocessing.text import Tokenizer
@@ -99,6 +100,7 @@ def calculation_embedding_weights(words_vectors, tokenizer, vocab_size, dim_size
 
 def process_sentences(data, num_classes, typeA):
     labels = list()
+    labels_onehot = list()
     sentences = list()
     for line in data:
         label = int(line[0])
@@ -108,7 +110,8 @@ def process_sentences(data, num_classes, typeA):
                 onehot.append(1)
             else:
                 onehot.append(0)
-        labels.append(onehot)
+        labels_onehot.append(onehot)
+        labels.append(label)
         if typeA == 'All':
             #print('All')
             sentence = line[1] + ' ' + line[2]
@@ -119,7 +122,7 @@ def process_sentences(data, num_classes, typeA):
             #print('Answer')
             sentence = line[2]
         sentences.append(sentence)
-    return np.array(sentences), np.array(labels)
+    return np.array(sentences), np.array(labels_onehot), np.array(labels)
 
 # fit a tokenizer
 def create_tokenizer(lines):
@@ -146,7 +149,7 @@ def self_confusionM(cor_list, pred_list):
     pred_class = {}
     True_class = {}
     totals = 0
-    all_precision = all_recall = all_f1 = all_accuracy = 0
+    all_precision = all_recall = all_f1 = 0
     
     for index, cor_v in enumerate(cor_list):
         pred_v = pred_list[index]
@@ -179,14 +182,11 @@ def self_confusionM(cor_list, pred_list):
         if not class_i in pred_class:
             pred_class[class_i] = 0
     print('Multi Class Confusion Matrix')
-    print('Class\tAccuracy\tPrecision\tRecall\t\tF-Measure\tNumbers')
-    class_list.sort()
-    appearT = ''
+    print('Class\tPrecision\tRecall\t\tF-Measure\tNumbers')
     for class_i in class_list:
         pc = float(pred_class[class_i])
         cc = float(cor_class[class_i])
         tc = float(True_class[class_i])
-        ac = tc / cc
         if pc == 0:
             precision = 0
         else:
@@ -202,12 +202,9 @@ def self_confusionM(cor_list, pred_list):
         all_precision +=precision * cor_class[class_i] / totals
         all_recall += recall * cor_class[class_i] / totals
         all_f1 += f1 * cor_class[class_i] / totals
-        all_accuracy += ac
-        appearT += "%.1f%%(%.2f)\t" % (round(ac*10000)/100, f1)
-        print('%d\t%.3f\t\t%.3f\t\t%.3f\t\t%.3f\t\t%d\t\t%.1f%%(%.2f)' % (class_i+1, ac, precision, recall, f1, cor_class[class_i], round(ac*10000)/100, f1))
+        print('%d\t%.3f\t\t%.3f\t\t%.3f\t\t%d' % (class_i, precision, recall, f1, cor_class[class_i]))
     print('---------------------------------------------------')
-    print('%s\t%.3f\t\t%.3f\t\t%.3f\t\t%.3f\t\t%d' % ('all', all_accuracy, all_precision, all_recall, all_f1, totals))
-    print(appearT)
+    print('%s\t%.3f\t\t%.3f\t\t%.3f\t\t%d' % ('all', all_precision, all_recall, all_f1, totals))
     return all_precision, all_recall, all_f1
 
 def self_metric(truth_y, pred_y):
@@ -229,7 +226,7 @@ def train_lstm_model(vocab, dim_size, input_length, embedding_weights, units, cl
     model.add(Dropout(0.7))
     model.add(LSTM(units, activation='relu'))
     model.add(Dropout(0.7))
-    model.add(Dense(class_num, activation='softmax'))
+    model.add(Dense(3, activation='softmax'))
     return model
 
 def main(argv):
@@ -246,6 +243,7 @@ def main(argv):
     word_vectors = None
     class_num = 3
     TrainC = FLAGS.TrainC
+    seed = 1
 
     #dataset parameter
     dataset_path = FLAGS.dataset_path
@@ -271,56 +269,67 @@ def main(argv):
     sentences, words_vectors = compare_WV(dataset, words_vectors)
     #texts = [word for word in words_index]
 
-    train_tokenizer = create_tokenizer(sentences)
-    train_vocab_size = len(train_tokenizer.word_index) + 1
+    tokenizer = create_tokenizer(sentences)
+    train_vocab_size = len(tokenizer.word_index) + 1
+    kfold = StratifiedKFold(n_splits=5, shuffle=True, random_state=seed)
 
     # Process Sentences
-    trainX, trainY = process_sentences(train, class_num, typeA)
-    testX, testY = process_sentences(test, class_num, typeA)
-    length = max_length(trainX)
+    trainX, trainY, trainL = process_sentences(train, class_num, typeA)
+    testX, testY, testL = process_sentences(test, class_num, typeA)
+    X , Y, labels = process_sentences(dataset, class_num, typeA)
+    length = max_length(X)
     print("資料長度：", length)
     print("資料集筆數：", len(dataset))
 
     # Calculated Embedding Weights
-    embedding_weights = calculation_embedding_weights(words_vectors, train_tokenizer, train_vocab_size, dim_size)
+    embedding_weights = calculation_embedding_weights(words_vectors, tokenizer, train_vocab_size, dim_size)
     del words_vectors
     print("詞權重數量", len(embedding_weights), ", 字詞維度", len(embedding_weights[0]))
-    trainX = encode_sequences(train_tokenizer, input_length, trainX[:])
-    testX = encode_sequences(train_tokenizer, input_length, testX[:])
-    
+    trainX = encode_sequences(tokenizer, input_length, trainX[:])
+    testX = encode_sequences(tokenizer, input_length, testX[:])
+    X = encode_sequences(tokenizer, input_length, X[:])
+
+    cvscores = list()
+
     model = None
-    if not os.path.isfile(SaveModel_path) or TrainC:
-        #print('Not Exist Model')
-        TrainModel_s = time.time()
-        #callback = TensorBoard(log_dir='log_root', histogram_freq=0,  write_graph=True, write_images=True)
-        print('Setup Model')
-        model  = train_lstm_model(train_vocab_size, dim_size, input_length, embedding_weights, units, class_num)
-        print('Compile Model')
-        model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
-        print("Start Train")
-        #model.fit(trainX, trainY, epochs=epochs_step, batch_size=_batch_size, callbacks=[callback], verbose=1)
-        model.fit(trainX, trainY, epochs=epochs_step, batch_size=_batch_size, verbose=1)
-        TrainModel_e = time.time()
-        #model.save(SaveModel_path)
-        print('Train Classifier Model Finished elapsed time: %.2f sec.' % (TrainModel_e - TrainModel_s))
-    else:
-        #print('Exist Model')
-        model = tf.contrib.keras.models.load_model(SaveModel_path)
+    for train, test in kfold.split(X, labels):
+        if not os.path.isfile(SaveModel_path) or TrainC:
+            #print('Not Exist Model')
+            TrainModel_s = time.time()
+            #callback = TensorBoard(log_dir='log_root', histogram_freq=0,  write_graph=True, write_images=True)
+            print('Setup Model')
+            model  = train_lstm_model(train_vocab_size, dim_size, input_length, embedding_weights, units, class_num)
+            print('Compile Model')
+            model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+            print("Start Train")
+            #model.fit(trainX, trainY, epochs=epochs_step, batch_size=_batch_size, callbacks=[callback], verbose=1)
+            model.fit(X[train], Y[train], epochs=epochs_step, batch_size=_batch_size, verbose=0)
+            TrainModel_e = time.time()
+            #model.save(SaveModel_path)
+            print('Train Classifier Model Finished elapsed time: %.2f sec.' % (TrainModel_e - TrainModel_s))
+        else:
+            #print('Exist Model')
+            model = tf.contrib.keras.models.load_model(SaveModel_path)
 
-    pred = model.predict(testX, batch_size=_batch_size, verbose=0)
-    pred = np.argmax(pred, 1).tolist()
-    truth = np.argmax(testY, 1).tolist()
-    precision, recall, f1 = self_metric(truth, pred)
+        pred = model.predict(X[test], batch_size=_batch_size, verbose=0)
+        pred = np.argmax(pred, 1).tolist()
+        truth = np.argmax(Y[test], 1).tolist()
+        precision, recall, f1 = self_metric(truth, pred)
 
-    print("Start Evaluate")
-    score, accuracy = model.evaluate(trainX, trainY,batch_size=_batch_size, verbose=1)
-    print('Train score:', score)
-    print('Train accuracy:', accuracy)
-    score, accuracy = model.evaluate(testX, testY,batch_size=_batch_size, verbose=1)
-    print('Test score:', score)
-    print('Test accuracy:', accuracy)
-    print('F1值', f1)
-    print("%.1f%%(%.2f)" % (round(accuracy*10000)/100, f1))
-    
+        print("Start Evaluate")
+        #score, accuracy = model.evaluate(X[train], Y[train],batch_size=_batch_size, verbose=0)
+        #print('Train score:', score)
+        #print('Train accuracy:', accuracy)
+        #score, accuracy = model.evaluate(X[test], Y[test],batch_size=_batch_size, verbose=0)
+        #print('Test score:', score)
+        #print('Test accuracy:', accuracy)
+
+        scores = model.evaluate(X[test], Y[test], verbose=0)
+        cvscores.append(scores[1] * 100)
+
+        print('F1值', f1)
+        print("%.1f%%(%.2f)" % (round(scores[1]*10000)/100, f1))
+    print("%.2f%% (+/- %.2f%%)" % (np.mean(cvscores), np.std(cvscores)))
+
 if __name__ == '__main__':
     tf.app.run()
